@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const mongoose = require('mongoose')
 const jwt = require('express-jwt')
+const async = require('async')
 const config = require('../config')
 const Entry = mongoose.model('Entry')
 const Account = mongoose.model('Account')
@@ -52,13 +53,85 @@ router.put('/update/:entry', auth, (req, res) => {
     Entry.findById(req.params.entry, (err, entry) => {
         if (err) return res.status(400).json(err)
         if (!entry) return res.status(400).json({ msg: 'Entry not found'})
+        var etryDiff = 0
+        var originalEntryAmt = entry.amount
+        if (entry.amount > req.body.amount) {
+            etryDiff = entry.amount - req.body.amount
+            if (entry.type === 'deposit') {
+                entry.balanceAfterTransaction-=etryDiff
+            }
+            if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                entry.balanceAfterTransaction+=etryDiff
+            }
+        } else if (entry.amount < req.body.amount) {
+            etryDiff = req.body.amount - entry.amount
+            if (entry.type === 'deposit') {
+                entry.balanceAfterTransaction+=etryDiff
+            }
+            if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                entry.balanceAfterTransaction-=etryDiff
+            }
+        }
         entry.description = req.body.description
         entry.category = req.body.category
         entry.type = req.body.type
         entry.amount = req.body.amount
         entry.save((err, etry) => {
             if (err) return res.status(400).json(err)
-            res.json(etry)
+            Entry.find({ entered: { $gt: etry.entered}}, (err, entries) => {
+                if (err) { return res.status(400).json(err) }
+                async.eachSeries(entries, (e, nextE) => {
+                    var etryDiff = 0
+                    if (originalEntryAmt > req.body.amount) {
+                        etryDiff = originalEntryAmt - req.body.amount
+                        if (entry.type === 'deposit') {
+                            e.balanceAfterTransaction-=etryDiff
+                        }
+                        if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                            e.balanceAfterTransaction+=etryDiff
+                        }
+                    } else if (originalEntryAmt < req.body.amount) {
+                        etryDiff = req.body.amount - originalEntryAmt
+                        if (entry.type === 'deposit') {
+                            e.balanceAfterTransaction+=etryDiff
+                        }
+                        if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                            e.balanceAfterTransaction-=etryDiff
+                        }
+                    }
+                    e.save((err) => {
+                        if (err) { return res.status(400).json(err) }
+                        nextE()
+                    })
+                }, (err) => {
+                    if (err) { return res.status(400).json(err) }
+                    Account.findById(etry.account, (err, account) => {
+                        if (err) { return res.status(400).json(err) }
+                        var etryDiff = 0
+                        if (originalEntryAmt > req.body.amount) {
+                            etryDiff = originalEntryAmt - req.body.amount
+                            if (entry.type === 'deposit') {
+                                account.balance-=etryDiff
+                            }
+                            if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                                account.balance+=etryDiff
+                            }
+                        } else if (originalEntryAmt < req.body.amount) {
+                            etryDiff = req.body.amount - originalEntryAmt
+                            if (entry.type === 'deposit') {
+                                account.balance+=etryDiff
+                            }
+                            if (entry.type === 'withdrawl' || entry.type === 'payment') {
+                                account.balance-=etryDiff
+                            }
+                        }
+                        account.save((err) => {
+                            if (err) { return res.status(400).json(err) }
+                            res.json(etry)
+                        })                       
+                    })
+                })
+            })
         })
     })
 })
@@ -89,6 +162,7 @@ router.post('/add/:account', auth, (req, res) => { // Add user account
             account.balance-=req.body.amount
         }
         entry.balanceAfterTransaction = account.balance
+        entry.account = account._id
         entry.save((err, etry) => {
             if (err) { return res.status(400).json(err) }
             account.entries.push(etry._id)
@@ -101,24 +175,53 @@ router.post('/add/:account', auth, (req, res) => { // Add user account
 })
 
 router.delete('/delete/:account/:entry', auth, (req, res) => {
-    Entry.findByIdAndRemove(req.params.entry, { useFindAndModify: false }, (err) => {
+    Entry.findById(req.params.entry, (err, entry) => {
         if (err) { return res.status(400).json(err) }
-        Account.findById(req.params.account, (err, account) => {
+        var originalEntryAmt = entry.amount
+        var originalEntryType = entry.type
+        var originalEntryEntered = entry.entered
+        entry.remove((err) => {
             if (err) { return res.status(400).json(err) }
-            if (!account) {
-                return res.status(400).json({ msg: 'Account not found' })
-            }
-            for (var i = 0; i < account.entries.length; i++) {
-                if (account.entries[i] === req.params.entry) {
-                    account.entries.splice(i, 1)
-                }
-            }
-            account.save((err) => {
+            Entry.find({ entered: { $gt: originalEntryEntered }}, (err, entries) => {
                 if (err) { return res.status(400).json(err) }
-                res.json({ msg: 'deleted' })
+                async.eachSeries(entries, (e, nextE) => {
+                    if (originalEntryType === 'deposit') {
+                        e.balanceAfterTransaction-=originalEntryAmt
+                    }
+                    if (originalEntryType === 'withdrawl' || originalEntryType === 'payment') {
+                        e.balanceAfterTransaction+=originalEntryAmt
+                    }
+                    e.save((err) => {
+                        if (err) { return res.status(400).json(err) }
+                        nextE()
+                    })
+                }, (err) => {
+                    if (err) { return res.status(400).json(err) }
+                    Account.findById(req.params.account, (err, account) => {
+                        if (err) { return res.status(400).json(err) }
+                        if (!account) {
+                            return res.status(400).json({ msg: 'Account not found' })
+                        }
+                        for (var i = 0; i < account.entries.length; i++) {
+                            if (account.entries[i] === req.params.entry) {
+                                account.entries.splice(i, 1)
+                            }
+                        }
+                        if (originalEntryType === 'deposit') {
+                            account.balance-=originalEntryAmt
+                        }
+                        if (originalEntryType === 'withdrawl' || originalEntryType === 'payment') {
+                            account.balance+=originalEntryAmt
+                        }
+                        account.save((err) => {
+                            if (err) { return res.status(400).json(err) }
+                            res.json({ msg: 'deleted' })
+                        })
+                    })
+                })
             })
         })
-    }) 
+    })
 })
 
 module.exports = router

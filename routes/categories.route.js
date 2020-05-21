@@ -60,6 +60,7 @@ router.post('/add/:user', auth, (req, res) => { // Add a category
             return res.status(400).json({ msg: 'User not found' })
         }
         var category = new Category(req.body)
+        category.user = user._id
         category.save((err, cat) => {
             if (err) { return res.status(400).json(err) }
             user.categories.push(cat._id)

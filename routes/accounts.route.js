@@ -59,6 +59,7 @@ router.post('/add/:user', auth, (req, res) => { // Add user account
             return res.status(400).json({ msg: 'User not found' })
         }
         var account = new Account(req.body)
+        account.user = user._id
         account.save((err, acct) => {
             if (err) { return res.status(400).json(err) }
             user.accounts.push(acct._id)
