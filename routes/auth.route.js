@@ -11,6 +11,7 @@ router.post('/login', (req, res) => {
 			msg: 'Please fill out all fields'
 		})
 	}
+	req.body.username = req.body.username.toLowerCase().trim()
     User.findOne({username: req.body.username}, (err, user) => {
         if (err) { return res.status(400).json(err) }
         if (!user) {
@@ -29,7 +30,7 @@ router.post('/register', (req, res) => {
 			msg: 'Please fill out all fields'
 		})
 	}
-
+	req.body.username = req.body.username.toLowerCase().trim()
 	User.findOne({username: req.body.username}, (err, user) => {
 		if (err) { return res.status(400).json(err) }
 		if (!user) {
